@@ -1,0 +1,445 @@
+---
+title: "Dedoose Data Reformatting for Inter-Rater Reliability"
+author: "GEU Research Team"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-tools: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+#| label: load-packages
+
+# Check and install required packages if needed
+required_packages <- c("dplyr", "tidyr", "stringr", "readxl", "janitor", "irr", "knitr", "kableExtra", "writexl")
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+
+if(length(new_packages) > 0) {
+  install.packages(new_packages, dependencies = TRUE, repos = "https://cran.rstudio.com/", quiet = TRUE)
+}
+
+# For RStudio/VS Code integration
+if (exists("vsc.attach", mode = "function")) {
+  vsc.attach()
+} else if (requireNamespace("httpgd", quietly = TRUE)) {
+  httpgd::hgd()
+}
+
+options(scipen = 999)
+```
+
+## Overview
+
+This notebook reformats Dedoose qualitative coding data for inter-rater reliability (IRR) analysis using Cohen's kappa. The key challenge is that coders can select multiple codes for an excerpt, and these need to be consistently ordered between coders (e.g., "A,B" should match "B,A").
+
+Expected output format:
+
+- Media Title
+- Excerpt Range
+- Excerpt Copy
+- Coder_[Name1]_Codes
+- Coder_[Name2]_Codes
+
+## Data Import
+
+```{r load-data}
+#| label: import-data
+
+# Option 1: Read from Excel file
+data_file <- "data/2025_8_25_1115_PT05MMFCP_LIMA_ICR Reformat.xlsx"
+
+if (file.exists(data_file)) {
+  df <- readxl::read_excel(data_file) |>
+    janitor::clean_names()
+} else {
+  # Option 2: Use file chooser for CSV
+  # df <- read.csv(file.choose(), header = TRUE, stringsAsFactors = FALSE, fileEncoding = "Latin1")
+  stop("Please specify your data file path or uncomment the file.choose() line")
+}
+
+# Display structure
+str(df)
+
+# Show column names for verification
+print("Column names in data:")
+names(df)
+```
+
+## Step 1: Initial Data Preparation
+
+```{r prepare-data}
+#| label: step1-prepare
+
+df1 <- df |>
+  dplyr::mutate(
+    dplyr::across(c(excerpt_range, codes_applied_combined, excerpt_creator, excerpt_copy), 
+           as.character, 
+           .names = "{.col}")
+  )
+
+# Display sample
+df1 |>
+  dplyr::select(media_title, excerpt_range, excerpt_creator, codes_applied_combined) |>
+  head() |>
+  knitr::kable(caption = "Initial data structure") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 2: Simplify Excerpt Range
+
+```{r simplify-range}
+#| label: step2-range
+
+# Keep only first number in Excerpt.Range for matching
+df2 <- df1 |> 
+  dplyr::mutate(excerpt_range = stringr::str_extract(excerpt_range, "^[0-9]+"))
+
+# Check the transformation
+df2 |>
+  dplyr::select(media_title, excerpt_range, excerpt_creator) |>
+  head() |>
+  knitr::kable(caption = "Simplified excerpt ranges") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 3: Handle Multiple Codes
+
+```{r split-codes}
+#| label: step3-split
+
+# Split multiple codes into separate rows
+df3 <- df2 |> 
+  tidyr::separate_rows(codes_applied_combined, sep = ",\\s*") |>
+  dplyr::mutate(codes_applied_combined = trimws(codes_applied_combined))
+
+# Show the effect of splitting
+data.frame(
+  Stage = c("Before splitting", "After splitting"),
+  Rows = c(nrow(df2), nrow(df3))
+) |>
+  knitr::kable(caption = "Effect of splitting codes") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+
+df3 |>
+  dplyr::select(media_title, excerpt_range, excerpt_creator, codes_applied_combined) |>
+  head(10) |>
+  knitr::kable(caption = "After splitting codes") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 4: Sort Codes Within Each Excerpt/Coder
+
+```{r sort-codes}
+#| label: step4-sort
+
+# Sort codes alphabetically within each excerpt/coder combination
+df4 <- df3 |>
+  dplyr::group_by(media_title, excerpt_range, excerpt_creator, excerpt_copy) |>
+  dplyr::arrange(codes_applied_combined, .by_group = TRUE) |>
+  dplyr::mutate(code_order = dplyr::row_number()) |>
+  dplyr::ungroup()
+
+# Display sorted codes
+df4 |>
+  dplyr::select(media_title, excerpt_range, excerpt_creator, codes_applied_combined, code_order) |>
+  dplyr::filter(excerpt_range %in% head(unique(df4$excerpt_range), 2)) |>
+  knitr::kable(caption = "Codes sorted alphabetically") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 5: Combine Multiple Codes
+
+```{r combine-codes}
+#| label: step5-combine
+
+# Combine codes back together (now sorted)
+df5 <- df4 |>
+  dplyr::group_by(media_title, excerpt_range, excerpt_creator, excerpt_copy) |>
+  dplyr::summarise(
+    codes_combined = paste(codes_applied_combined, collapse = ","),
+    .groups = "drop"
+  )
+
+# Show combined codes
+df5 |>
+  head() |>
+  knitr::kable(caption = "Codes combined after sorting") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 6: Pivot to Wide Format
+
+```{r pivot-wide}
+#| label: step6-pivot
+
+# Get unique coders
+coders <- unique(df5$excerpt_creator)
+
+# For IRR, we typically compare two coders at a time
+# Select which two coders to compare
+coder1 <- coders[1]  # Adjust index as needed
+coder2 <- coders[2]  # Adjust index as needed
+
+# Display coders being compared
+data.frame(
+  Role = c("Available coders", "Coder 1 (selected)", "Coder 2 (selected)"),
+  Value = c(paste(coders, collapse = ", "), coder1, coder2)
+) |>
+  knitr::kable(caption = "Coder selection for comparison") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Filter to selected coders and pivot
+df6 <- df5 |>
+  dplyr::filter(excerpt_creator %in% c(coder1, coder2)) |>
+  dplyr::mutate(
+    coder_label = dplyr::case_when(
+      excerpt_creator == coder1 ~ "Coder1",
+      excerpt_creator == coder2 ~ "Coder2",
+      TRUE ~ excerpt_creator
+    )
+  ) |>
+  tidyr::pivot_wider(
+    id_cols = c(media_title, excerpt_range, excerpt_copy),
+    names_from = coder_label,
+    values_from = codes_combined,
+    values_fill = "missing"
+  ) |>
+  dplyr::rename(
+    Coder1_codes = Coder1,
+    Coder2_codes = Coder2
+  ) |>
+  # Reorder columns to match requested format
+  dplyr::select(excerpt_range, media_title, excerpt_copy, Coder1_codes, Coder2_codes)
+
+# Display final format
+df6 |>
+  head(10) |>
+  knitr::kable(caption = "Final reformatted data") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+  kableExtra::scroll_box(width = "100%")
+```
+
+## Step 7: Calculate Inter-Rater Reliability
+
+```{r calculate-irr}
+#| label: step7-irr
+
+# Get coder column names
+coder_cols <- c("Coder1_codes", "Coder2_codes")
+
+if (length(coder_cols) >= 2) {
+  # Create rating matrix
+  ratings <- df6 |>
+    dplyr::select(dplyr::all_of(coder_cols)) |>
+    as.matrix()
+  
+  # Calculate Cohen's kappa
+  kappa_result <- irr::kappa2(ratings, weight = "unweighted")
+  
+  # Interpretation
+  kappa_val <- kappa_result$value
+  interpretation <- dplyr::case_when(
+    kappa_val < 0 ~ "Poor agreement",
+    kappa_val < 0.20 ~ "Slight agreement",
+    kappa_val < 0.40 ~ "Fair agreement",
+    kappa_val < 0.60 ~ "Moderate agreement",
+    kappa_val < 0.80 ~ "Substantial agreement",
+    TRUE ~ "Almost perfect agreement"
+  )
+  
+  # Display kappa results
+  data.frame(
+    Metric = c("Kappa coefficient", "Standard error", "P-value", "Interpretation"),
+    Value = c(
+      round(kappa_result$value, 3),
+      round(kappa_result$statistic, 3),
+      format(kappa_result$p.value, scientific = TRUE),
+      interpretation
+    )
+  ) |>
+    knitr::kable(caption = "Cohen's Kappa Results") |>
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+  
+  # Agreement summary
+  agreement_summary <- df6 |>
+    dplyr::mutate(
+      agreement = df6[[coder_cols[1]]] == df6[[coder_cols[2]]]
+    ) |>
+    dplyr::summarise(
+      total_excerpts = dplyr::n(),
+      agreements = sum(agreement),
+      disagreements = sum(!agreement),
+      percent_agreement = round(mean(agreement) * 100, 1)
+    )
+  
+  # Display agreement summary
+  agreement_summary |>
+    knitr::kable(caption = "Agreement Summary") |>
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+}
+```
+
+## Step 8: Analyze Disagreements
+
+```{r analyze-disagreements}
+#| label: step8-disagreements
+
+if (length(coder_cols) >= 2) {
+  disagreements <- df6 |>
+    dplyr::filter(df6[[coder_cols[1]]] != df6[[coder_cols[2]]]) |>
+    dplyr::select(excerpt_range, media_title, excerpt_copy, dplyr::all_of(coder_cols))
+  
+  # Summary of disagreements
+  data.frame(
+    Metric = "Total disagreements",
+    Count = nrow(disagreements)
+  ) |>
+    knitr::kable() |>
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+  
+  if (nrow(disagreements) > 0) {
+    # Display sample of disagreements
+    disagreements |>
+      head(10) |>
+      knitr::kable(caption = "Sample of coding disagreements (first 10)") |>
+      kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+      kableExtra::scroll_box(width = "100%", height = "400px")
+  }
+}
+```
+
+## Export Results
+
+```{r export}
+#| label: export-data
+
+# Create output directory
+if (!dir.exists("output")) {
+  dir.create("output")
+}
+
+# Generate filename with timestamp
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
+output_csv <- paste0("output/irr_reformatted_", timestamp, ".csv")
+output_xlsx <- paste0("output/irr_reformatted_", timestamp, ".xlsx")
+
+# Save files
+write.csv(df6, output_csv, row.names = FALSE)
+writexl::write_xlsx(df6, output_xlsx)
+
+# Display saved files
+data.frame(
+  Format = c("CSV", "Excel"),
+  Filename = c(output_csv, output_xlsx)
+) |>
+  knitr::kable(caption = "Exported files") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Function for Future Use
+
+```{r reusable-function}
+#| label: create-function
+
+reformat_dedoose_for_irr <- function(
+    data_path,
+    coder1_name = NULL,
+    coder2_name = NULL,
+    file_encoding = "Latin1"
+) {
+  
+  # Read data
+  if (stringr::str_detect(data_path, "\\.xlsx?$")) {
+    df <- readxl::read_excel(data_path) |> janitor::clean_names()
+  } else {
+    df <- read.csv(data_path, header = TRUE, stringsAsFactors = FALSE, fileEncoding = file_encoding) |> 
+      janitor::clean_names()
+  }
+  
+  # Prepare data
+  df_processed <- df |>
+    # Ensure columns are character
+    dplyr::mutate(dplyr::across(c(excerpt_range, codes_applied_combined, excerpt_creator, excerpt_copy), as.character)) |>
+    # Simplify excerpt range
+    dplyr::mutate(excerpt_range = stringr::str_extract(excerpt_range, "^[0-9]+")) |>
+    # Split codes
+    tidyr::separate_rows(codes_applied_combined, sep = ",\\s*") |>
+    dplyr::mutate(codes_applied_combined = trimws(codes_applied_combined)) |>
+    # Sort codes alphabetically
+    dplyr::group_by(media_title, excerpt_range, excerpt_creator, excerpt_copy) |>
+    dplyr::arrange(codes_applied_combined, .by_group = TRUE) |>
+    # Combine sorted codes
+    dplyr::summarise(
+      codes_combined = paste(codes_applied_combined, collapse = ","),
+      .groups = "drop"
+    )
+  
+  # Get coders
+  all_coders <- unique(df_processed$excerpt_creator)
+  
+  # Select coders
+  if (is.null(coder1_name) || is.null(coder2_name)) {
+    if (length(all_coders) >= 2) {
+      coder1_name <- all_coders[1]
+      coder2_name <- all_coders[2]
+      # Auto-selected coders - will be shown in results
+    } else {
+      stop("Not enough coders in data")
+    }
+  }
+  
+  # Filter and pivot
+  df_wide <- df_processed |>
+    dplyr::filter(excerpt_creator %in% c(coder1_name, coder2_name)) |>
+    tidyr::pivot_wider(
+      id_cols = c(media_title, excerpt_range, excerpt_copy),
+      names_from = excerpt_creator,
+      values_from = codes_combined,
+      names_glue = "Coder_{excerpt_creator}_Codes",
+      values_fill = "missing"
+    )
+  
+  return(df_wide)
+}
+
+# Example usage:
+# reformatted <- reformat_dedoose_for_irr(
+#   "data/your_file.xlsx",
+#   coder1_name = "Coder1",
+#   coder2_name = "Coder2"
+# )
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **df6 issue mentioned in email**: The problem occurs when codes aren't properly sorted before combining. This version sorts codes alphabetically before combining them.
+
+2. **Column name mismatches**: Use `janitor::clean_names()` to standardize column names.
+
+3. **Multiple coders**: The code now explicitly selects two coders for comparison.
+
+4. **Missing codes**: Handled by filling with "missing" in `tidyr::pivot_wider()`.
+
+### Adapting for New Data
+
+To use with new Dedoose exports:
+
+1. Update the file path in the Data Import section
+2. Verify column names match expected format
+3. Select appropriate coders for comparison
+4. Run all chunks in sequence
+
+## Session Information
+
+```{r session}
+#| label: session-info
+sessionInfo()
+```

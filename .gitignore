@@ -1,0 +1,67 @@
+# Data files
+data/
+*.xlsx
+*.xls
+*.csv
+*.tsv
+*.sav
+*.dta
+*.rds
+*.RData
+*.rda
+
+# Quarto
+*.html
+*.pdf
+*_files/
+*_cache/
+/.quarto/
+.quarto/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# RStudio
+.Rproj.user
+
+# Output
+output/
+results/
+figures/
+plots/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Claude
+.claude/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+*.bak
+*.swp
+
+# Python (if used)
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.env.local
+
+# VS Code
+.vscode/
+*.code-workspace
