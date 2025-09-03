@@ -1,5 +1,5 @@
 ---
-title: "Dedoose Data Reformatting for Inter-Rater Reliability"
+title: "Dedoose IRR Analysis - Simplified Version"
 author: "GEU Research Team"
 date: "`r Sys.Date()`"
 format: 
@@ -8,6 +8,8 @@ format:
     toc-depth: 2
     code-fold: true
     code-tools: true
+    embed-resources: true
+    self-contained: true
 execute:
   warning: false
   message: false
@@ -17,12 +19,23 @@ execute:
 #| label: load-packages
 
 # Check and install required packages if needed
-required_packages <- c("dplyr", "tidyr", "stringr", "readxl", "janitor", "irr", "knitr", "kableExtra", "writexl")
+required_packages <- c("dplyr", "tidyr", "stringr", "readxl", "janitor", 
+                       "knitr", "kableExtra", "writexl")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
 
 if(length(new_packages) > 0) {
   install.packages(new_packages, dependencies = TRUE, repos = "https://cran.rstudio.com/", quiet = TRUE)
 }
+
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl)
+library(janitor)
+library(knitr)
+library(kableExtra)
+library(writexl)
 
 # For RStudio/VS Code integration
 if (exists("vsc.attach", mode = "function")) {
@@ -34,284 +47,494 @@ if (exists("vsc.attach", mode = "function")) {
 options(scipen = 999)
 ```
 
-## Overview
-
-This notebook reformats Dedoose qualitative coding data for inter-rater reliability (IRR) analysis using Cohen's kappa. The key challenge is that coders can select multiple codes for an excerpt, and these need to be consistently ordered between coders (e.g., "A,B" should match "B,A").
-
-Expected output format:
-
-- Media Title
-- Excerpt Range
-- Excerpt Copy
-- Coder_[Name1]_Codes
-- Coder_[Name2]_Codes
 
 ## Data Import
 
 ```{r load-data}
 #| label: import-data
 
-# Option 1: Read from Excel file
+# Read data file
 data_file <- "data/2025_8_25_1115_PT05MMFCP_LIMA_ICR Reformat.xlsx"
 
 if (file.exists(data_file)) {
-  df <- readxl::read_excel(data_file) |>
+  df_raw <- readxl::read_excel(data_file)
+  
+  # Add source row numbers BEFORE any cleaning
+  df_raw$source_row_num <- seq_len(nrow(df_raw))
+  
+  # Now clean names
+  df <- df_raw |>
     janitor::clean_names()
+    
 } else {
-  # Option 2: Use file chooser for CSV
-  # df <- read.csv(file.choose(), header = TRUE, stringsAsFactors = FALSE, fileEncoding = "Latin1")
-  stop("Please specify your data file path or uncomment the file.choose() line")
+  stop("Data file not found. Please check the path.")
 }
 
 # Display structure
-str(df)
+cat("Data dimensions:", nrow(df), "rows x", ncol(df), "columns\n")
+cat("\nColumn names:", paste(names(df), collapse = ", "), "\n")
 
-# Show column names for verification
-print("Column names in data:")
-names(df)
+# Show first few rows
+df |>
+  select(source_row_num, media_title, excerpt_range, excerpt_creator, codes_applied_combined) |>
+  head() |>
+  knitr::kable(caption = "Sample of raw data with row numbers") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
-## Step 1: Initial Data Preparation
+## Step 1: Prepare Data and Identify Coders
 
 ```{r prepare-data}
 #| label: step1-prepare
 
+# Convert key columns to character
 df1 <- df |>
-  dplyr::mutate(
-    dplyr::across(c(excerpt_range, codes_applied_combined, excerpt_creator, excerpt_copy), 
-           as.character, 
-           .names = "{.col}")
+  mutate(
+    excerpt_range = as.character(excerpt_range),  # Keep full range (e.g., "1023-1050")
+    codes_applied_combined = as.character(codes_applied_combined),
+    excerpt_creator = as.character(excerpt_creator),
+    excerpt_copy = as.character(excerpt_copy)
   )
 
-# Display sample
-df1 |>
-  dplyr::select(media_title, excerpt_range, excerpt_creator, codes_applied_combined) |>
-  head() |>
-  knitr::kable(caption = "Initial data structure") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-```
+# Identify unique coders
+all_coders <- unique(df1$excerpt_creator)
+cat("Coders found in data:", paste(all_coders, collapse = ", "), "\n")
 
-## Step 2: Simplify Excerpt Range
+# Select two coders to compare (using actual names)
+if (length(all_coders) >= 2) {
+  coder1_name <- all_coders[1]
+  coder2_name <- all_coders[2]
+} else {
+  stop("Need at least 2 coders in the data")
+}
 
-```{r simplify-range}
-#| label: step2-range
+cat("\nComparing:", coder1_name, "vs", coder2_name, "\n")
 
-# Keep only first number in Excerpt.Range for matching
-df2 <- df1 |> 
-  dplyr::mutate(excerpt_range = stringr::str_extract(excerpt_range, "^[0-9]+"))
+# Filter to just these two coders
+df_filtered <- df1 |>
+  filter(excerpt_creator %in% c(coder1_name, coder2_name))
 
-# Check the transformation
-df2 |>
-  dplyr::select(media_title, excerpt_range, excerpt_creator) |>
-  head() |>
-  knitr::kable(caption = "Simplified excerpt ranges") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-```
-
-## Step 3: Handle Multiple Codes
-
-```{r split-codes}
-#| label: step3-split
-
-# Split multiple codes into separate rows
-df3 <- df2 |> 
-  tidyr::separate_rows(codes_applied_combined, sep = ",\\s*") |>
-  dplyr::mutate(codes_applied_combined = trimws(codes_applied_combined))
-
-# Show the effect of splitting
-data.frame(
-  Stage = c("Before splitting", "After splitting"),
-  Rows = c(nrow(df2), nrow(df3))
-) |>
-  knitr::kable(caption = "Effect of splitting codes") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-
-df3 |>
-  dplyr::select(media_title, excerpt_range, excerpt_creator, codes_applied_combined) |>
-  head(10) |>
-  knitr::kable(caption = "After splitting codes") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-```
-
-## Step 4: Sort Codes Within Each Excerpt/Coder
-
-```{r sort-codes}
-#| label: step4-sort
-
-# Sort codes alphabetically within each excerpt/coder combination
-df4 <- df3 |>
-  dplyr::group_by(media_title, excerpt_range, excerpt_creator, excerpt_copy) |>
-  dplyr::arrange(codes_applied_combined, .by_group = TRUE) |>
-  dplyr::mutate(code_order = dplyr::row_number()) |>
-  dplyr::ungroup()
-
-# Display sorted codes
-df4 |>
-  dplyr::select(media_title, excerpt_range, excerpt_creator, codes_applied_combined, code_order) |>
-  dplyr::filter(excerpt_range %in% head(unique(df4$excerpt_range), 2)) |>
-  knitr::kable(caption = "Codes sorted alphabetically") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-```
-
-## Step 5: Combine Multiple Codes
-
-```{r combine-codes}
-#| label: step5-combine
-
-# Combine codes back together (now sorted)
-df5 <- df4 |>
-  dplyr::group_by(media_title, excerpt_range, excerpt_creator, excerpt_copy) |>
-  dplyr::summarise(
-    codes_combined = paste(codes_applied_combined, collapse = ","),
+# Get coder-specific statistics
+coder_stats <- df_filtered |>
+  group_by(excerpt_creator) |>
+  summarise(
+    excerpts_coded = n(),
+    unique_excerpts = n_distinct(excerpt_range),
+    unique_codes = n_distinct(str_split(codes_applied_combined, ",\\s*") |> unlist()),
     .groups = "drop"
   )
 
-# Show combined codes
-df5 |>
+# Show sample with full ranges
+df_filtered |>
+  select(source_row_num, excerpt_range, excerpt_creator, codes_applied_combined) |>
   head() |>
-  knitr::kable(caption = "Codes combined after sorting") |>
+  knitr::kable(caption = "Data with full excerpt ranges") |>
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
-## Step 6: Pivot to Wide Format
+### Coder Statistics
 
-```{r pivot-wide}
-#| label: step6-pivot
+```{r coder-stats}
+#| label: coder-stats
 
-# Get unique coders
-coders <- unique(df5$excerpt_creator)
-
-# For IRR, we typically compare two coders at a time
-# Select which two coders to compare
-coder1 <- coders[1]  # Adjust index as needed
-coder2 <- coders[2]  # Adjust index as needed
-
-# Display coders being compared
-data.frame(
-  Role = c("Available coders", "Coder 1 (selected)", "Coder 2 (selected)"),
-  Value = c(paste(coders, collapse = ", "), coder1, coder2)
-) |>
-  knitr::kable(caption = "Coder selection for comparison") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-
-# Filter to selected coders and pivot
-df6 <- df5 |>
-  dplyr::filter(excerpt_creator %in% c(coder1, coder2)) |>
-  dplyr::mutate(
-    coder_label = dplyr::case_when(
-      excerpt_creator == coder1 ~ "Coder1",
-      excerpt_creator == coder2 ~ "Coder2",
-      TRUE ~ excerpt_creator
-    )
-  ) |>
-  tidyr::pivot_wider(
-    id_cols = c(media_title, excerpt_range, excerpt_copy),
-    names_from = coder_label,
-    values_from = codes_combined,
-    values_fill = "missing"
-  ) |>
-  dplyr::rename(
-    Coder1_codes = Coder1,
-    Coder2_codes = Coder2
-  ) |>
-  # Reorder columns to match requested format
-  dplyr::select(excerpt_range, media_title, excerpt_copy, Coder1_codes, Coder2_codes)
-
-# Display final format
-df6 |>
-  head(10) |>
-  knitr::kable(caption = "Final reformatted data") |>
-  kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
-  kableExtra::scroll_box(width = "100%")
-```
-
-## Step 7: Calculate Inter-Rater Reliability
-
-```{r calculate-irr}
-#| label: step7-irr
-
-# Get coder column names
-coder_cols <- c("Coder1_codes", "Coder2_codes")
-
-if (length(coder_cols) >= 2) {
-  # Create rating matrix
-  ratings <- df6 |>
-    dplyr::select(dplyr::all_of(coder_cols)) |>
-    as.matrix()
-  
-  # Calculate Cohen's kappa
-  kappa_result <- irr::kappa2(ratings, weight = "unweighted")
-  
-  # Interpretation
-  kappa_val <- kappa_result$value
-  interpretation <- dplyr::case_when(
-    kappa_val < 0 ~ "Poor agreement",
-    kappa_val < 0.20 ~ "Slight agreement",
-    kappa_val < 0.40 ~ "Fair agreement",
-    kappa_val < 0.60 ~ "Moderate agreement",
-    kappa_val < 0.80 ~ "Substantial agreement",
-    TRUE ~ "Almost perfect agreement"
+# Get coder-specific statistics
+coder_stats <- df_filtered |>
+  group_by(excerpt_creator) |>
+  summarise(
+    excerpts_coded = n(),
+    unique_excerpts = n_distinct(excerpt_range),
+    unique_codes = n_distinct(str_split(codes_applied_combined, ",\\s*") |> unlist()),
+    .groups = "drop"
   )
-  
-  # Display kappa results
-  data.frame(
-    Metric = c("Kappa coefficient", "Standard error", "P-value", "Interpretation"),
-    Value = c(
-      round(kappa_result$value, 3),
-      round(kappa_result$statistic, 3),
-      format(kappa_result$p.value, scientific = TRUE),
-      interpretation
-    )
-  ) |>
-    knitr::kable(caption = "Cohen's Kappa Results") |>
-    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
-  
-  # Agreement summary
-  agreement_summary <- df6 |>
-    dplyr::mutate(
-      agreement = df6[[coder_cols[1]]] == df6[[coder_cols[2]]]
-    ) |>
-    dplyr::summarise(
-      total_excerpts = dplyr::n(),
-      agreements = sum(agreement),
-      disagreements = sum(!agreement),
-      percent_agreement = round(mean(agreement) * 100, 1)
-    )
-  
-  # Display agreement summary
-  agreement_summary |>
-    knitr::kable(caption = "Agreement Summary") |>
+
+coder_stats |>
+  knitr::kable(caption = "Individual Coder Summary") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Get code frequency by coder
+code_by_coder <- df_filtered |>
+  separate_rows(codes_applied_combined, sep = ",\\s*") |>
+  mutate(codes_applied_combined = trimws(codes_applied_combined)) |>
+  # Filter out NA, empty strings, and "NA" as text
+  filter(!is.na(codes_applied_combined), 
+         codes_applied_combined != "", 
+         codes_applied_combined != "NA", 
+         codes_applied_combined != "na") |>
+  group_by(excerpt_creator, codes_applied_combined) |>
+  summarise(count = n(), .groups = "drop") |>
+  pivot_wider(names_from = excerpt_creator, values_from = count, values_fill = 0) |>
+  mutate(total = !!sym(coder1_name) + !!sym(coder2_name)) |>
+  arrange(desc(total))
+
+# Display all codes (scrollable if many)
+code_by_coder |>
+  knitr::kable(caption = "All Codes by Coder (Complete List)") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+  kableExtra::scroll_box(width = "100%", height = "400px")
+
+# Summary of code usage
+code_usage_summary <- data.frame(
+  Metric = c(
+    "Total unique codes",
+    paste0("Codes used by ", coder1_name, " only"),
+    paste0("Codes used by ", coder2_name, " only"),
+    "Codes used by both coders"
+  ),
+  Count = c(
+    nrow(code_by_coder),
+    sum(code_by_coder[[coder1_name]] > 0 & code_by_coder[[coder2_name]] == 0),
+    sum(code_by_coder[[coder1_name]] == 0 & code_by_coder[[coder2_name]] > 0),
+    sum(code_by_coder[[coder1_name]] > 0 & code_by_coder[[coder2_name]] > 0)
+  )
+)
+
+code_usage_summary |>
+  knitr::kable(caption = "Code Usage Summary") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Step 2: Split Codes and Create Union
+
+```{r split-codes}
+#| label: step2-split
+
+# Split codes into separate rows
+df_split <- df_filtered |>
+  separate_rows(codes_applied_combined, sep = ",\\s*") |>
+  mutate(codes_applied_combined = trimws(codes_applied_combined)) |>
+  rename(code = codes_applied_combined) |>
+  # Filter out NA, empty strings, and "NA" as text
+  filter(!is.na(code), code != "", code != "NA", code != "na")
+
+# Get all unique excerpt-code combinations across both coders
+all_excerpt_codes <- df_split |>
+  select(media_title, excerpt_range, excerpt_copy, code) |>
+  distinct() |>
+  arrange(media_title, excerpt_range, code)
+
+cat("Total unique excerpt-code combinations:", nrow(all_excerpt_codes), "\n")
+
+# Show example of an excerpt with multiple codes
+example_excerpt <- df_split |>
+  filter(excerpt_range == df_split$excerpt_range[1]) |>
+  select(excerpt_range, excerpt_creator, code) |>
+  arrange(code)
+
+if (nrow(example_excerpt) > 0) {
+  example_excerpt |>
+    knitr::kable(caption = "Example: All codes for one excerpt from both coders") |>
     kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
 }
 ```
 
-## Step 8: Analyze Disagreements
+## Step 3: Build Comparison Matrix
 
-```{r analyze-disagreements}
-#| label: step8-disagreements
+```{r build-matrix}
+#| label: step3-matrix
 
-if (length(coder_cols) >= 2) {
-  disagreements <- df6 |>
-    dplyr::filter(df6[[coder_cols[1]]] != df6[[coder_cols[2]]]) |>
-    dplyr::select(excerpt_range, media_title, excerpt_copy, dplyr::all_of(coder_cols))
-  
-  # Summary of disagreements
-  data.frame(
-    Metric = "Total disagreements",
-    Count = nrow(disagreements)
+# Get source row numbers for each coder separately
+coder1_source_rows <- df_filtered |>
+  filter(excerpt_creator == coder1_name) |>
+  select(media_title, excerpt_range, source_row_num) |>
+  distinct() |>
+  rename(!!paste0("source_row_", coder1_name) := source_row_num)
+
+coder2_source_rows <- df_filtered |>
+  filter(excerpt_creator == coder2_name) |>
+  select(media_title, excerpt_range, source_row_num) |>
+  distinct() |>
+  rename(!!paste0("source_row_", coder2_name) := source_row_num)
+
+# Create matrix with all excerpt-code combinations
+df_matrix <- all_excerpt_codes
+
+# Add source row numbers for each coder
+df_matrix <- df_matrix |>
+  left_join(coder1_source_rows, by = c("media_title", "excerpt_range")) |>
+  left_join(coder2_source_rows, by = c("media_title", "excerpt_range"))
+
+# Add coder 1's codes - properly join on BOTH excerpt_range AND code
+coder1_codes <- df_split |>
+  filter(excerpt_creator == coder1_name) |>
+  select(media_title, excerpt_range, code) |>
+  mutate(!!coder1_name := "present") |>
+  distinct()
+
+df_matrix <- df_matrix |>
+  left_join(coder1_codes, by = c("media_title", "excerpt_range", "code"))
+
+# Add coder 2's codes - properly join on BOTH excerpt_range AND code
+coder2_codes <- df_split |>
+  filter(excerpt_creator == coder2_name) |>
+  select(media_title, excerpt_range, code) |>
+  mutate(!!coder2_name := "present") |>
+  distinct()
+
+df_matrix <- df_matrix |>
+  left_join(coder2_codes, by = c("media_title", "excerpt_range", "code"))
+
+# Replace NAs with "missing" and calculate agreement
+df_final <- df_matrix |>
+  mutate(
+    !!coder1_name := ifelse(is.na(!!sym(coder1_name)), "missing", "present"),
+    !!coder2_name := ifelse(is.na(!!sym(coder2_name)), "missing", "present"),
+    # Agreement means both coders made the same choice about this code
+    agreement = (!!sym(coder1_name) == !!sym(coder2_name))
   ) |>
-    knitr::kable() |>
-    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+  # Reorder columns for clarity - now with separate source rows for each coder
+  select(
+    !!paste0("source_row_", coder1_name), 
+    !!paste0("source_row_", coder2_name),
+    media_title, 
+    excerpt_range,
+    code, 
+    !!sym(coder1_name), 
+    !!sym(coder2_name), 
+    agreement, 
+    excerpt_copy
+  ) |>
+  arrange(media_title, excerpt_range, code)
+
+# Display sample of final structure
+df_final |>
+  select(-excerpt_copy) |>  # Hide long text for display
+  head(15) |>
+  knitr::kable(caption = "Final data structure (one row per excerpt-code)") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+  kableExtra::column_spec(8, background = ifelse(head(df_final$agreement, 15), "#d4f1d4", "#f1d4d4"))
+```
+
+## Step 4: Calculate Agreement Statistics
+
+### Code Usage Analysis
+
+```{r code-usage}
+#| label: step4-code-usage
+
+# Separate analysis for codes used by both vs one coder
+code_usage <- df_final |>
+  filter(code != "missing", !is.na(code), code != "NA", code != "na") |>
+  group_by(code) |>
+  summarise(
+    times_both_used = sum(!!sym(coder1_name) == "present" & !!sym(coder2_name) == "present"),
+    times_only_coder1 = sum(!!sym(coder1_name) == "present" & !!sym(coder2_name) == "missing"),
+    times_only_coder2 = sum(!!sym(coder1_name) == "missing" & !!sym(coder2_name) == "present"),
+    total_occurrences = n()
+  ) |>
+  mutate(
+    # Agreement is always 100% when both used it (by our current definition)
+    # This is because we're counting instances where both applied the same code
+    agreement_when_both = ifelse(times_both_used > 0,
+                                  paste0(times_both_used, "/", times_both_used, " (100%)"),
+                                  "N/A"),
+    usage_pattern = case_when(
+      times_both_used > 0 & times_only_coder1 == 0 & times_only_coder2 == 0 ~ "Both coders always",
+      times_both_used > 0 & (times_only_coder1 > 0 | times_only_coder2 > 0) ~ "Sometimes both, sometimes one",
+      times_only_coder1 > 0 & times_only_coder2 == 0 ~ paste("Only", coder1_name),
+      times_only_coder2 > 0 & times_only_coder1 == 0 ~ paste("Only", coder2_name),
+      TRUE ~ "Unknown"
+    )
+  ) |>
+  arrange(desc(times_both_used), desc(total_occurrences))
+
+# Summary statistics
+usage_summary <- code_usage |>
+  summarise(
+    codes_used_by_both = sum(times_both_used > 0),
+    codes_only_coder1 = sum(times_only_coder1 > 0 & times_both_used == 0),
+    codes_only_coder2 = sum(times_only_coder2 > 0 & times_both_used == 0),
+    total_unique_codes = n()
+  )
+
+data.frame(
+  Metric = c(
+    "Total unique codes",
+    paste("Codes used by both coders"),
+    paste("Codes used only by", coder1_name),
+    paste("Codes used only by", coder2_name)
+  ),
+  Count = c(
+    usage_summary$total_unique_codes,
+    usage_summary$codes_used_by_both,
+    usage_summary$codes_only_coder1,
+    usage_summary$codes_only_coder2
+  )
+) |>
+  knitr::kable(caption = "Code Usage Overlap") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Individual Code Usage Patterns
+
+**Note:** The table below shows how often each code was used by each coder independently.
+
+```{r code-patterns}
+#| label: code-patterns
+
+# Display detailed code usage patterns
+# Create dynamic column names
+col_names <- c("Code", "Both Used", 
+               paste("Only", coder1_name), 
+               paste("Only", coder2_name), 
+               "Usage Pattern")
+
+code_usage |>
+  select(code, times_both_used, times_only_coder1, times_only_coder2, usage_pattern) |>
+  setNames(col_names) |>
+  knitr::kable(caption = "Code Usage Patterns") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+  kableExtra::scroll_box(width = "100%", height = "400px")
+```
+
+### Excerpt-Level Agreement
+
+**Question:** Do coders agree on the complete set of codes for each excerpt?
+
+```{r excerpt-agreement}
+#| label: step4-excerpt-stats
+
+# Calculate excerpt-level agreement on complete code sets
+excerpt_agreement <- df_final |>
+  group_by(media_title, excerpt_range) |>
+  summarise(
+    total_codes = n(),
+    codes_agreed = sum(agreement, na.rm = TRUE),
+    codes_disagreed = sum(!agreement, na.rm = TRUE),
+    has_any_codes = sum(!!sym(coder1_name) == "present" | !!sym(coder2_name) == "present") > 0,
+    .groups = "drop"
+  ) |>
+  mutate(
+    agreement_type = case_when(
+      !has_any_codes ~ "Not Reviewed by Either",
+      codes_disagreed == 0 & codes_agreed > 0 ~ "Perfect Agreement (identical code sets)",
+      codes_agreed > 0 & codes_disagreed > 0 ~ "Partial Agreement (some codes match)",
+      codes_agreed == 0 & codes_disagreed > 0 ~ "No Agreement (no codes in common)",
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Summary by agreement type
+agreement_type_summary <- excerpt_agreement |>
+  count(agreement_type) |>
+  mutate(
+    percent = round(n / sum(n) * 100, 2),
+    description = paste0(n, "/", sum(n), " excerpts (", percent, "%)")
+  ) |>
+  arrange(desc(n))
+
+agreement_type_summary |>
+  select(`Agreement Type` = agreement_type, `Count` = description) |>
+  knitr::kable(caption = "Agreement on Complete Code Sets per Excerpt") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Prepare examples for display
+agreement_examples <- excerpt_agreement |>
+  group_by(agreement_type) |>
+  slice(1) |>
+  ungroup() |>
+  filter(!is.na(agreement_type))
+```
+
+### Agreement Pattern Examples
+
+```{r agreement-examples}
+#| label: agreement-examples
+
+# Create a combined table showing one example of each type
+example_tables <- list()
+
+for (i in 1:nrow(agreement_examples)) {
+  type <- agreement_examples$agreement_type[i]
+  example_range <- agreement_examples$excerpt_range[i]
   
-  if (nrow(disagreements) > 0) {
-    # Display sample of disagreements
-    disagreements |>
-      head(10) |>
-      knitr::kable(caption = "Sample of coding disagreements (first 10)") |>
-      kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
-      kableExtra::scroll_box(width = "100%", height = "400px")
+  example_data <- df_final |>
+    filter(excerpt_range == example_range) |>
+    select(excerpt_range, code, !!sym(coder1_name), !!sym(coder2_name), agreement) |>
+    slice(1:3)  # Limit to first 3 codes for readability
+  
+  if (nrow(example_data) > 0) {
+    # Add type as first column
+    example_data <- example_data |>
+      mutate(Type = gsub(" \\(.*\\)", "", type), .before = 1)
+    example_tables[[type]] <- example_data
   }
 }
+
+# Combine all examples into one table
+if (length(example_tables) > 0) {
+  all_examples_df <- bind_rows(example_tables)
+  
+  all_examples_df |>
+    knitr::kable(caption = "Examples of Each Agreement Pattern") |>
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+    kableExtra::pack_rows(index = table(all_examples_df$Type)) |>
+    kableExtra::row_spec(which(all_examples_df$agreement), background = "#d4f1d4") |>
+    kableExtra::row_spec(which(!all_examples_df$agreement), background = "#f1d4d4")
+}
+```
+
+## Step 5: Analyze Disagreements
+
+```{r disagreements}
+#| label: step5-disagreements
+
+# Find disagreements
+disagreements <- df_final |>
+  filter(!agreement) |>
+  select(
+    !!paste0("source_row_", coder1_name),
+    !!paste0("source_row_", coder2_name),
+    excerpt_range, 
+    code, 
+    !!sym(coder1_name), 
+    !!sym(coder2_name), 
+    excerpt_copy
+  )
+
+cat("Total disagreements:", nrow(disagreements), "\n\n")
+
+# Most disputed codes
+disputed_codes <- disagreements |>
+  count(code) |>
+  arrange(desc(n)) |>
+  head(10)
+
+if (nrow(disputed_codes) > 0) {
+  disputed_codes |>
+    knitr::kable(caption = "Most Frequently Disputed Codes") |>
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+}
+
+# Sample of disagreements
+if (nrow(disagreements) > 0) {
+  disagreements |>
+    select(-excerpt_copy) |>  # Remove long text for display
+    head(10) |>
+    knitr::kable(caption = "Sample Disagreements (First 10)") |>
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+}
+
+# Pattern analysis: Codes one coder uses but the other doesn't
+coder1_only <- df_final |>
+  filter(!!sym(coder1_name) == "present", !!sym(coder2_name) == "missing") |>
+  count(code) |>
+  arrange(desc(n)) |>
+  mutate(coder = coder1_name, pattern = "Used by this coder only")
+
+coder2_only <- df_final |>
+  filter(!!sym(coder1_name) == "missing", !!sym(coder2_name) == "present") |>
+  count(code) |>
+  arrange(desc(n)) |>
+  mutate(coder = coder2_name, pattern = "Used by this coder only")
+
+# Combine and display all unique codes
+unique_codes_by_coder <- bind_rows(coder1_only, coder2_only) |>
+  arrange(coder, desc(n))
+
+unique_codes_by_coder |>
+  knitr::kable(caption = "Codes Used by Only One Coder (Complete List)") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) |>
+  kableExtra::scroll_box(width = "100%", height = "300px")
 ```
 
 ## Export Results
@@ -324,118 +547,92 @@ if (!dir.exists("output")) {
   dir.create("output")
 }
 
-# Generate filename with timestamp
-timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
-output_csv <- paste0("output/irr_reformatted_", timestamp, ".csv")
-output_xlsx <- paste0("output/irr_reformatted_", timestamp, ".xlsx")
+# Generate filename without timestamp
+output_csv <- "output/irr_analysis.csv"
+output_xlsx <- "output/irr_analysis.xlsx"
 
-# Save files
-write.csv(df6, output_csv, row.names = FALSE)
-writexl::write_xlsx(df6, output_xlsx)
+# Save main analysis file
+write.csv(df_final, output_csv, row.names = FALSE)
+writexl::write_xlsx(df_final, output_xlsx)
 
-# Display saved files
+# Display summary
 data.frame(
+  Metric = c(
+    "Total rows in output",
+    "Unique excerpts",
+    "Unique codes",
+    "Agreements",
+    "Disagreements"
+  ),
+  Value = c(
+    nrow(df_final),
+    n_distinct(df_final$excerpt_range),
+    n_distinct(df_final$code[df_final$code != "missing"]),
+    sum(df_final$agreement),
+    sum(!df_final$agreement)
+  )
+) |>
+  knitr::kable(caption = "Output File Summary") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Display saved files info
+files_saved <- data.frame(
   Format = c("CSV", "Excel"),
   Filename = c(output_csv, output_xlsx)
-) |>
-  knitr::kable(caption = "Exported files") |>
+)
+
+files_saved |>
+  knitr::kable(caption = "Output Files Created") |>
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
-## Function for Future Use
+## Summary Report
 
-```{r reusable-function}
-#| label: create-function
+```{r summary}
+#| label: summary-report
+#| output: asis
 
-reformat_dedoose_for_irr <- function(
-    data_path,
-    coder1_name = NULL,
-    coder2_name = NULL,
-    file_encoding = "Latin1"
-) {
-  
-  # Read data
-  if (stringr::str_detect(data_path, "\\.xlsx?$")) {
-    df <- readxl::read_excel(data_path) |> janitor::clean_names()
-  } else {
-    df <- read.csv(data_path, header = TRUE, stringsAsFactors = FALSE, fileEncoding = file_encoding) |> 
-      janitor::clean_names()
-  }
-  
-  # Prepare data
-  df_processed <- df |>
-    # Ensure columns are character
-    dplyr::mutate(dplyr::across(c(excerpt_range, codes_applied_combined, excerpt_creator, excerpt_copy), as.character)) |>
-    # Simplify excerpt range
-    dplyr::mutate(excerpt_range = stringr::str_extract(excerpt_range, "^[0-9]+")) |>
-    # Split codes
-    tidyr::separate_rows(codes_applied_combined, sep = ",\\s*") |>
-    dplyr::mutate(codes_applied_combined = trimws(codes_applied_combined)) |>
-    # Sort codes alphabetically
-    dplyr::group_by(media_title, excerpt_range, excerpt_creator, excerpt_copy) |>
-    dplyr::arrange(codes_applied_combined, .by_group = TRUE) |>
-    # Combine sorted codes
-    dplyr::summarise(
-      codes_combined = paste(codes_applied_combined, collapse = ","),
-      .groups = "drop"
-    )
-  
-  # Get coders
-  all_coders <- unique(df_processed$excerpt_creator)
-  
-  # Select coders
-  if (is.null(coder1_name) || is.null(coder2_name)) {
-    if (length(all_coders) >= 2) {
-      coder1_name <- all_coders[1]
-      coder2_name <- all_coders[2]
-      # Auto-selected coders - will be shown in results
-    } else {
-      stop("Not enough coders in data")
-    }
-  }
-  
-  # Filter and pivot
-  df_wide <- df_processed |>
-    dplyr::filter(excerpt_creator %in% c(coder1_name, coder2_name)) |>
-    tidyr::pivot_wider(
-      id_cols = c(media_title, excerpt_range, excerpt_copy),
-      names_from = excerpt_creator,
-      values_from = codes_combined,
-      names_glue = "Coder_{excerpt_creator}_Codes",
-      values_fill = "missing"
-    )
-  
-  return(df_wide)
-}
+# Get key statistics
+total_excerpts <- n_distinct(df_final$excerpt_range)
+# Get the actual COUNTS from the summary, not count of rows
+perfect_agreement_count <- agreement_type_summary$n[agreement_type_summary$agreement_type == "Perfect Agreement (identical code sets)"]
+partial_agreement_count <- agreement_type_summary$n[agreement_type_summary$agreement_type == "Partial Agreement (some codes match)"]
+# Handle if not found
+if(length(perfect_agreement_count) == 0) perfect_agreement_count <- 0
+if(length(partial_agreement_count) == 0) partial_agreement_count <- 0
+perfect_or_partial_count <- perfect_agreement_count + partial_agreement_count
 
-# Example usage:
-# reformatted <- reformat_dedoose_for_irr(
-#   "data/your_file.xlsx",
-#   coder1_name = "Coder1",
-#   coder2_name = "Coder2"
-# )
+# Create summary data
+overall_summary <- data.frame(
+  Metric = c(
+    "Coders Compared",
+    "Total Excerpts Analyzed", 
+    "Total Unique Codes Used",
+    "Codes Used by Both Coders",
+    "Perfect Agreement on Code Sets",
+    "Partial Agreement Only",
+    "Perfect or Partial Agreement"
+  ),
+  Value = c(
+    paste(coder1_name, "vs", coder2_name),
+    total_excerpts,
+    n_distinct(df_final$code[df_final$code != "missing"]),
+    usage_summary$codes_used_by_both,
+    paste0(perfect_agreement_count, "/", total_excerpts, 
+           " excerpts (", round(perfect_agreement_count/total_excerpts*100, 1), "%)"),
+    paste0(partial_agreement_count, "/", total_excerpts,
+           " excerpts (", round(partial_agreement_count/total_excerpts*100, 1), "%)"),
+    paste0(perfect_or_partial_count, "/", total_excerpts,
+           " excerpts (", round(perfect_or_partial_count/total_excerpts*100, 1), "%)")
+  )
+)
+
+overall_summary |>
+  knitr::kable(caption = "Inter-Rater Reliability Summary") |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed")) |>
+  kableExtra::column_spec(1, bold = TRUE)
 ```
 
-## Troubleshooting
-
-### Common Issues
-
-1. **df6 issue mentioned in email**: The problem occurs when codes aren't properly sorted before combining. This version sorts codes alphabetically before combining them.
-
-2. **Column name mismatches**: Use `janitor::clean_names()` to standardize column names.
-
-3. **Multiple coders**: The code now explicitly selects two coders for comparison.
-
-4. **Missing codes**: Handled by filling with "missing" in `tidyr::pivot_wider()`.
-
-### Adapting for New Data
-
-To use with new Dedoose exports:
-
-1. Update the file path in the Data Import section
-2. Verify column names match expected format
-3. Select appropriate coders for comparison
-4. Run all chunks in sequence
 
 ## Session Information
 
